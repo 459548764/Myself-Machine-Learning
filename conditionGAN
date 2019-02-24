@@ -1,0 +1,121 @@
+
+import tensorflow as tf
+import tensorflow.contrib.layers as tcl
+import numpy as np
+from tensorflow.examples.tutorials.mnist import input_data
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+
+def plot(samples):
+    fig = plt.figure(figsize=(4, 4))
+    gs = gridspec.GridSpec(4, 4)
+    gs.update(wspace=0.05, hspace=0.05)
+
+    for i, sample in enumerate(samples):
+        ax = plt.subplot(gs[i])
+        plt.axis('off')
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+        ax.set_aspect('equal')
+        plt.imshow(sample.reshape(28, 28), cmap='Greys_r')
+    plt.show()
+
+    return fig
+
+class ConditionGAN():
+    def __init__(self):
+        self.x_dim = 784
+        self.y_dim = 10
+        self.z_dim = 100
+        self.batch_size = 64
+
+    def sample_z(self,m,n):
+        return np.random.uniform(-1., 1., size=[m,n])
+
+    def concat(self,m,n):
+        return tf.concat([m,n],1)
+
+    def generator(self,input,reuse=False,name='generator'):
+        with tf.variable_scope(name) as scope:
+            if reuse:
+                scope.reuse_variables()
+            x = tcl.fully_connected(input,
+                                    num_outputs=128,
+                                    activation_fn=tf.nn.leaky_relu,
+                                    weights_initializer=tf.random_normal_initializer(0,0.02))
+            x = tcl.fully_connected(x,
+                                    self.x_dim,
+                                    activation_fn=tf.nn.sigmoid,
+                                    weights_initializer=tf.random_normal_initializer(0,0.02))
+            return x
+
+    def discriminator(self,input,reuse=False,name='discriminator'):
+        with tf.variable_scope(name) as scope:
+            if reuse:
+                scope.reuse_variables()
+            x = tcl.fully_connected(input,
+                                    num_outputs=128,
+                                    activation_fn=tf.nn.leaky_relu,
+                                    weights_initializer=tf.random_normal_initializer(0,0.02))
+            x = tcl.fully_connected(x,
+                                    num_outputs=1,
+                                    activation_fn=None,
+                                    weights_initializer=tf.random_normal_initializer(0,0.02))
+            return x
+
+    def train(self):
+        mnist = input_data.read_data_sets('MNIST_data', one_hot=True)
+
+        self.x = tf.placeholder(tf.float32, shape=[None, self.x_dim])
+        self.z = tf.placeholder(tf.float32, shape=[None, self.z_dim])
+        self.y = tf.placeholder(tf.float32, shape=[None, self.y_dim])
+
+        self.G_sample = self.generator(self.concat(self.z, self.y))
+        self.D_real = self.discriminator(self.concat(self.x, self.y))
+        self.D_fake = self.discriminator(self.concat(self.G_sample, self.y),reuse = True)
+
+        self.D_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_real, labels=tf.ones_like(self.D_real))) + \
+                      tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_fake, labels=tf.zeros_like(self.D_fake)))
+        self.G_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_fake, labels=tf.ones_like(self.D_fake)))
+
+        self.g_vars = [v for v in tf.trainable_variables() if 'generator' in v.name]
+        self.d_vars = [v for v in tf.trainable_variables() if 'discriminator' in v.name]
+
+        self.D_solver = tf.train.AdamOptimizer().minimize(self.D_loss, var_list=self.d_vars)
+        self.G_solver = tf.train.AdamOptimizer().minimize(self.G_loss, var_list=self.g_vars)
+
+        sess = tf.Session()
+        sess.run(tf.global_variables_initializer())
+
+        for epoch in range(1000000):
+            x_b,y_b = mnist.train.next_batch(self.batch_size)
+            _,_,d_loss,g_loss = sess.run(
+                [self.D_solver,
+                 self.G_solver,
+                 self.D_loss,
+                 self.G_loss],
+                feed_dict={
+                    self.x:x_b,
+                    self.y:y_b,
+                    self.z:self.sample_z(self.batch_size, self.z_dim)}
+            )
+            # _,d_loss = sess.run(
+            #     [self.D_solver,self.D_loss],
+            #     feed_dict={self.x:x_b, self.y: y_b, self.z: self.sample_z(self.batch_size, self.z_dim)}
+            # )
+            # _,g_loss = sess.run(
+            #     [self.G_solver,self.G_loss],
+            #     feed_dict={self.y:y_b, self.z: self.sample_z(self.batch_size, self.z_dim)}
+            # )
+            if epoch % 1000 == 0:
+                print(epoch,d_loss,g_loss)
+                n_sample = 4
+                z_sample = self.sample_z(n_sample, self.z_dim)
+                y_sample = np.zeros(shape=[n_sample, self.y_dim])
+                y_sample[:, 7] = 1
+                samples = sess.run(self.G_sample, feed_dict={self.z: z_sample, self.y:y_sample})
+                fig = plot(samples)
+
+
+mygan = ConditionGAN()
+mygan.train()
